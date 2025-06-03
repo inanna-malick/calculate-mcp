@@ -1,0 +1,21 @@
+// Minimal arithmetic expression grammar
+expr = { SOI ~ additive ~ EOI }
+
+// Precedence: addition/subtraction (lowest)
+additive = { multiplicative ~ (add_op ~ multiplicative)* }
+add_op = { "+" | "-" }
+
+// Precedence: multiplication/division (higher)
+multiplicative = { primary ~ (mul_op ~ primary)* }
+mul_op = { "*" | "/" }
+
+// Primary expressions: numbers or parenthesized expressions
+primary = {
+    number |
+    "(" ~ additive ~ ")"
+}
+
+// Numbers: integers or decimals
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
