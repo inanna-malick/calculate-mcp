@@ -1,7 +1,7 @@
 //! Direct stdio MCP server for arithmetic evaluation
 
 use anyhow::Result;
-use compute_mcp::evaluate;
+use compute_mcp::{evaluate, Expression, evaluate_batch};
 use mcpr::schema::json_rpc::{JSONRPCMessage, JSONRPCResponse};
 use serde::Serialize;
 use serde_json::Value;
@@ -254,35 +254,43 @@ fn main() -> Result<()> {
 
                                 match expr_array {
                                     Some(exprs) => {
+                                        // Convert JSON values to Expression objects
+                                        let expressions: Vec<Expression> = exprs
+                                            .iter()
+                                            .filter_map(|v| v.as_str())
+                                            .map(Expression::from)
+                                            .collect();
+
+                                        // Evaluate all expressions
+                                        let batch_results = evaluate_batch(&expressions);
+                                        
+                                        // Convert results to response format
                                         let mut results = Vec::new();
-
-                                        for expr_val in exprs {
-                                            if let Some(expr_str) = expr_val.as_str() {
-                                                match evaluate(expr_str) {
-                                                    Ok(result) => {
-                                                        // Add to history
-                                                        if let Ok(mut state) = state.lock() {
-                                                            state.add_to_history(
-                                                                expr_str.to_string(),
-                                                                result,
-                                                            );
-                                                        }
-
-                                                        results.push(BatchResult {
-                                                            expression: expr_str.to_string(),
-                                                            result: Some(result),
-                                                            error: None,
-                                                            success: true,
-                                                        });
+                                        for eval_result in batch_results {
+                                            match eval_result.value {
+                                                Ok(result) => {
+                                                    // Add to history
+                                                    if let Ok(mut state) = state.lock() {
+                                                        state.add_to_history(
+                                                            eval_result.expression.to_string(),
+                                                            result,
+                                                        );
                                                     }
-                                                    Err(e) => {
-                                                        results.push(BatchResult {
-                                                            expression: expr_str.to_string(),
-                                                            result: None,
-                                                            error: Some(e.to_string()),
-                                                            success: false,
-                                                        });
-                                                    }
+
+                                                    results.push(BatchResult {
+                                                        expression: eval_result.expression.to_string(),
+                                                        result: Some(result),
+                                                        error: None,
+                                                        success: true,
+                                                    });
+                                                }
+                                                Err(e) => {
+                                                    results.push(BatchResult {
+                                                        expression: eval_result.expression.to_string(),
+                                                        result: None,
+                                                        error: Some(e.to_string()),
+                                                        success: false,
+                                                    });
                                                 }
                                             }
                                         }

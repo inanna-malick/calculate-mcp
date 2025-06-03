@@ -11,6 +11,7 @@ path = "src/bin/stdio_direct.rs"
 [dependencies]
 mcpr = "0.2.3"
 anyhow = "1.0"
+thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 pest = "2.6"

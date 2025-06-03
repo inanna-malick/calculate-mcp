@@ -1,26 +1,89 @@
 use pest::Parser;
 use pest_derive::Parser;
-use anyhow::{Result, anyhow};
+use std::fmt;
+use thiserror::Error;
 
 #[derive(Parser)]
 #[grammar = "compute.pest"]
 pub struct ComputeParser;
 
+/// Strong type for arithmetic expressions
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expression(String);
+
+impl Expression {
+    /// Create a new expression, returning None if empty
+    pub fn new(expr: impl Into<String>) -> Option<Self> {
+        let expr = expr.into();
+        if expr.trim().is_empty() {
+            None
+        } else {
+            Some(Self(expr))
+        }
+    }
+
+    /// Get the expression as a string slice
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for Expression {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<&str> for Expression {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+/// Custom error type for compute operations
+#[derive(Error, Debug, Clone, PartialEq)]
+pub enum ComputeError {
+    #[error("Parse error: {0}")]
+    ParseError(#[from] pest::error::Error<Rule>),
+    
+    #[error("Invalid number: {0}")]
+    InvalidNumber(#[from] std::num::ParseFloatError),
+    
+    #[error("Division by zero")]
+    DivisionByZero,
+    
+    #[error("Invalid expression structure")]
+    InvalidStructure,
+    
+    #[error("Empty expression")]
+    EmptyExpression,
+}
+
+pub type Result<T> = std::result::Result<T, ComputeError>;
+
 /// Evaluate an arithmetic expression string
 pub fn evaluate(expression: &str) -> Result<f64> {
-    let mut pairs = ComputeParser::parse(Rule::expr, expression)
-        .map_err(|e| anyhow!("Parse error: {}", e))?;
+    let expr = Expression::new(expression)
+        .ok_or(ComputeError::EmptyExpression)?;
+    evaluate_expression(&expr)
+}
+
+/// Evaluate a strongly-typed expression
+pub fn evaluate_expression(expr: &Expression) -> Result<f64> {
+    let mut pairs = ComputeParser::parse(Rule::expr, expr.as_str())?;
     
-    // Get the expr rule
-    let expr = pairs.next().unwrap();
+    let expr_pair = pairs
+        .next()
+        .ok_or(ComputeError::InvalidStructure)?;
     
-    // Skip the SOI and get to the actual expression
-    let mut inner = expr.into_inner();
-    let additive = inner.next().unwrap();
+    let mut inner = expr_pair.into_inner();
+    let additive = inner
+        .next()
+        .ok_or(ComputeError::InvalidStructure)?;
     
-    // The additive should be the actual expression
+    // Verify we have the expected rule
     if additive.as_rule() != Rule::additive {
-        return Err(anyhow!("Expected additive rule, got {:?}", additive.as_rule()));
+        return Err(ComputeError::InvalidStructure);
     }
     
     evaluate_additive(additive)
@@ -28,16 +91,20 @@ pub fn evaluate(expression: &str) -> Result<f64> {
 
 fn evaluate_additive(pair: pest::iterators::Pair<Rule>) -> Result<f64> {
     let mut pairs = pair.into_inner();
-    let mut result = evaluate_multiplicative(pairs.next().unwrap())?;
+    let mut result = evaluate_multiplicative(
+        pairs.next().ok_or(ComputeError::InvalidStructure)?
+    )?;
     
-    // Process any operators and operands
     while let Some(op) = pairs.next() {
-        let operand = evaluate_multiplicative(pairs.next().unwrap())?;
-        match op.as_str() {
-            "+" => result += operand,
-            "-" => result -= operand,
-            _ => unreachable!("Unexpected operator: {}", op.as_str()),
-        }
+        let operand = evaluate_multiplicative(
+            pairs.next().ok_or(ComputeError::InvalidStructure)?
+        )?;
+        
+        result = match op.as_str() {
+            "+" => result + operand,
+            "-" => result - operand,
+            _ => return Err(ComputeError::InvalidStructure),
+        };
     }
     
     Ok(result)
@@ -45,52 +112,100 @@ fn evaluate_additive(pair: pest::iterators::Pair<Rule>) -> Result<f64> {
 
 fn evaluate_multiplicative(pair: pest::iterators::Pair<Rule>) -> Result<f64> {
     let mut pairs = pair.into_inner();
-    let mut result = evaluate_primary(pairs.next().unwrap())?;
+    let mut result = evaluate_unary(
+        pairs.next().ok_or(ComputeError::InvalidStructure)?
+    )?;
     
-    // Process any operators and operands
     while let Some(op) = pairs.next() {
-        let operand = evaluate_primary(pairs.next().unwrap())?;
-        match op.as_str() {
-            "*" => result *= operand,
+        let operand = evaluate_unary(
+            pairs.next().ok_or(ComputeError::InvalidStructure)?
+        )?;
+        
+        result = match op.as_str() {
+            "*" => result * operand,
             "/" => {
                 if operand == 0.0 {
-                    return Err(anyhow!("Division by zero"));
+                    return Err(ComputeError::DivisionByZero);
                 }
-                result /= operand;
+                result / operand
             }
-            _ => unreachable!("Unexpected operator: {}", op.as_str()),
-        }
+            _ => return Err(ComputeError::InvalidStructure),
+        };
     }
     
     Ok(result)
 }
 
-fn evaluate_primary(pair: pest::iterators::Pair<Rule>) -> Result<f64> {
+fn evaluate_unary(pair: pest::iterators::Pair<Rule>) -> Result<f64> {
     match pair.as_rule() {
-        Rule::number => {
-            pair.as_str().parse::<f64>()
-                .map_err(|e| anyhow!("Invalid number: {}", e))
-        }
-        Rule::primary => {
-            // Primary can contain either a number or a parenthesized additive
-            let inner = pair.into_inner().next().unwrap();
-            match inner.as_rule() {
-                Rule::number => {
-                    inner.as_str().parse::<f64>()
-                        .map_err(|e| anyhow!("Invalid number: {}", e))
-                }
-                Rule::additive => evaluate_additive(inner),
-                _ => unreachable!("Unexpected rule in primary: {:?}", inner.as_rule()),
+        Rule::unary => {
+            let inner_str = pair.as_str();
+            if inner_str.starts_with('-') {
+                // It's a unary minus
+                let mut inner = pair.into_inner();
+                // Skip the minus sign token and get the operand
+                let operand = inner.next().ok_or(ComputeError::InvalidStructure)?;
+                Ok(-evaluate_unary(operand)?)
+            } else {
+                // It's just a primary expression wrapped in unary
+                let mut inner = pair.into_inner();
+                let first = inner.next().ok_or(ComputeError::InvalidStructure)?;
+                evaluate_primary(first)
             }
         }
-        _ => unreachable!("Unexpected rule: {:?}", pair.as_rule()),
+        _ => evaluate_primary(pair),
     }
+}
+
+fn evaluate_primary(pair: pest::iterators::Pair<Rule>) -> Result<f64> {
+    match pair.as_rule() {
+        Rule::number => Ok(pair.as_str().parse()?),
+        Rule::primary => {
+            let inner = pair.into_inner()
+                .next()
+                .ok_or(ComputeError::InvalidStructure)?;
+            
+            match inner.as_rule() {
+                Rule::number => Ok(inner.as_str().parse()?),
+                Rule::additive => evaluate_additive(inner),
+                _ => Err(ComputeError::InvalidStructure),
+            }
+        }
+        _ => Err(ComputeError::InvalidStructure),
+    }
+}
+
+/// Batch evaluation result
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvaluationResult {
+    pub expression: Expression,
+    pub value: Result<f64>,
+}
+
+/// Evaluate multiple expressions at once
+pub fn evaluate_batch(expressions: &[Expression]) -> Vec<EvaluationResult> {
+    expressions.iter()
+        .map(|expr| EvaluationResult {
+            expression: expr.clone(),
+            value: evaluate_expression(expr),
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_expression_type() {
+        assert!(Expression::new("").is_none());
+        assert!(Expression::new("  ").is_none());
+        assert!(Expression::new("2+3").is_some());
+        
+        let expr = Expression::from("2 + 3");
+        assert_eq!(expr.as_str(), "2 + 3");
+        assert_eq!(expr.to_string(), "2 + 3");
+    }
 
     #[test]
     fn test_basic_arithmetic() {
@@ -130,7 +245,35 @@ mod tests {
     }
 
     #[test]
-    fn test_division_by_zero() {
-        assert!(evaluate("5 / 0").is_err());
+    fn test_error_cases() {
+        // Division by zero
+        matches!(evaluate("5 / 0"), Err(ComputeError::DivisionByZero));
+        matches!(evaluate("1 / (2 - 2)"), Err(ComputeError::DivisionByZero));
+        
+        // Empty expression
+        matches!(evaluate(""), Err(ComputeError::EmptyExpression));
+        matches!(evaluate("   "), Err(ComputeError::EmptyExpression));
+        
+        // Invalid syntax
+        assert!(evaluate("2 +").is_err());
+        assert!(evaluate("+ 2").is_err());
+        assert!(evaluate("2 2").is_err());
+    }
+
+    #[test]
+    fn test_batch_evaluation() {
+        let expressions = vec![
+            Expression::from("2 + 3"),
+            Expression::from("10 / 2"),
+            Expression::from("5 / 0"),
+            Expression::from("3 * 4"),
+        ];
+        
+        let results = evaluate_batch(&expressions);
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0].value.as_ref().unwrap(), &5.0);
+        assert_eq!(results[1].value.as_ref().unwrap(), &5.0);
+        assert!(matches!(results[2].value, Err(ComputeError::DivisionByZero)));
+        assert_eq!(results[3].value.as_ref().unwrap(), &12.0);
     }
 }

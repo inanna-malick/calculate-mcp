@@ -6,8 +6,14 @@ additive = { multiplicative ~ (add_op ~ multiplicative)* }
 add_op = { "+" | "-" }
 
 // Precedence: multiplication/division (higher)
-multiplicative = { primary ~ (mul_op ~ primary)* }
+multiplicative = { unary ~ (mul_op ~ unary)* }
 mul_op = { "*" | "/" }
+
+// Unary expressions (for negative sign)
+unary = {
+    "-" ~ unary |
+    primary
+}
 
 // Primary expressions: numbers or parenthesized expressions
 primary = {
