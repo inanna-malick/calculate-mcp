@@ -1,12 +1,11 @@
 //! Direct stdio MCP server for arithmetic evaluation
 
 use anyhow::Result;
-use compute_mcp::{evaluate, Expression, evaluate_batch};
+use compute_mcp::{Expression, evaluate_batch};
 use mcpr::schema::json_rpc::{JSONRPCMessage, JSONRPCResponse};
 use serde::Serialize;
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
-use std::sync::{Arc, Mutex};
 
 // Include the grammar documentation
 const COMPUTE_GRAMMAR: &str = include_str!("../compute.pest");
@@ -25,12 +24,6 @@ struct ErrorResponse {
 }
 
 #[derive(Serialize)]
-struct EvaluateResponse {
-    expression: String,
-    result: f64,
-}
-
-#[derive(Serialize)]
 struct BatchResult {
     expression: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,48 +38,6 @@ struct BatchResponse {
     results: Vec<BatchResult>,
 }
 
-#[derive(Serialize)]
-struct HistoryEntry {
-    expression: String,
-    result: f64,
-}
-
-#[derive(Serialize)]
-struct HistoryResponse {
-    history: Vec<HistoryEntry>,
-    count: usize,
-}
-
-// Server state
-struct ComputeState {
-    history: Vec<(String, f64)>,
-}
-
-impl ComputeState {
-    fn new() -> Self {
-        Self {
-            history: Vec::new(),
-        }
-    }
-
-    fn add_to_history(&mut self, expression: String, result: f64) {
-        self.history.push((expression, result));
-        // Keep last 100 calculations
-        if self.history.len() > 100 {
-            self.history.remove(0);
-        }
-    }
-
-    fn get_history(&self) -> Vec<HistoryEntry> {
-        self.history
-            .iter()
-            .map(|(expr, result)| HistoryEntry {
-                expression: expr.clone(),
-                result: *result,
-            })
-            .collect()
-    }
-}
 
 // Helper functions
 fn success<T: Serialize>(data: T) -> Value {
@@ -94,14 +45,22 @@ fn success<T: Serialize>(data: T) -> Value {
         success: true,
         data,
     })
-    .unwrap()
+    .unwrap_or_else(|e| {
+        serde_json::json!({
+            "error": format!("Failed to serialize response: {}", e)
+        })
+    })
 }
 
 fn error(msg: impl std::fmt::Display) -> Value {
     serde_json::to_value(ErrorResponse {
         error: msg.to_string(),
     })
-    .unwrap()
+    .unwrap_or_else(|_| {
+        serde_json::json!({
+            "error": msg.to_string()
+        })
+    })
 }
 
 fn main() -> Result<()> {
@@ -114,9 +73,6 @@ fn main() -> Result<()> {
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
-
-    // Initialize state
-    let state = Arc::new(Mutex::new(ComputeState::new()));
 
     // Read messages line by line
     for line in stdin.lock().lines() {
@@ -168,20 +124,6 @@ fn main() -> Result<()> {
                             serde_json::json!({
                                 "tools": [
                                     {
-                                        "name": "evaluate",
-                                        "description": "Evaluate an arithmetic expression",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "expression": {
-                                                    "type": "string",
-                                                    "description": "Arithmetic expression to evaluate (e.g., '2 + 3 * 4')"
-                                                }
-                                            },
-                                            "required": ["expression"]
-                                        }
-                                    },
-                                    {
                                         "name": "evaluate_batch",
                                         "description": "Evaluate multiple arithmetic expressions",
                                         "inputSchema": {
@@ -196,14 +138,6 @@ fn main() -> Result<()> {
                                                 }
                                             },
                                             "required": ["expressions"]
-                                        }
-                                    },
-                                    {
-                                        "name": "history",
-                                        "description": "Get calculation history (last 100 calculations)",
-                                        "inputSchema": {
-                                            "type": "object",
-                                            "properties": {}
                                         }
                                     }
                                 ]
@@ -226,27 +160,6 @@ fn main() -> Result<()> {
                         let tool_args = params.get("arguments").cloned().unwrap_or(Value::Null);
 
                         let result = match tool_name {
-                            "evaluate" => {
-                                let expr_str = tool_args
-                                    .get("expression")
-                                    .and_then(|e| e.as_str())
-                                    .unwrap_or("");
-
-                                match evaluate(expr_str) {
-                                    Ok(result) => {
-                                        // Add to history
-                                        if let Ok(mut state) = state.lock() {
-                                            state.add_to_history(expr_str.to_string(), result);
-                                        }
-
-                                        success(EvaluateResponse {
-                                            expression: expr_str.to_string(),
-                                            result,
-                                        })
-                                    }
-                                    Err(e) => error(e),
-                                }
-                            }
                             "evaluate_batch" => {
                                 let expr_array = tool_args
                                     .get("expressions")
@@ -269,14 +182,6 @@ fn main() -> Result<()> {
                                         for eval_result in batch_results {
                                             match eval_result.value {
                                                 Ok(result) => {
-                                                    // Add to history
-                                                    if let Ok(mut state) = state.lock() {
-                                                        state.add_to_history(
-                                                            eval_result.expression.to_string(),
-                                                            result,
-                                                        );
-                                                    }
-
                                                     results.push(BatchResult {
                                                         expression: eval_result.expression.to_string(),
                                                         result: Some(result),
@@ -298,15 +203,6 @@ fn main() -> Result<()> {
                                         success(BatchResponse { results })
                                     }
                                     None => error("expressions must be an array of strings"),
-                                }
-                            }
-                            "history" => {
-                                if let Ok(state) = state.lock() {
-                                    let history = state.get_history();
-                                    let count = history.len();
-                                    success(HistoryResponse { history, count })
-                                } else {
-                                    error("Failed to access history")
                                 }
                             }
                             _ => error(format!("Unknown tool: {}", tool_name)),

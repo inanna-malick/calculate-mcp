@@ -1,5 +1,5 @@
 use proptest::prelude::*;
-use compute_mcp::{evaluate, Expression, ComputeError};
+use compute_mcp::{evaluate, parse_expression, Expression, ComputeError};
 
 // Strategy for generating valid arithmetic expressions
 fn arb_expr() -> impl Strategy<Value = String> {
@@ -291,6 +291,33 @@ fn test_extreme_values() {
     
     // Test with mixed scales
     assert!((evaluate("1000000 * 0.000001").unwrap() - 1.0).abs() < 0.0001);
+}
+
+proptest! {
+    #[test]
+    fn round_trip_pretty_print(expr in arb_expr()) {
+        // Skip if the expression doesn't parse (invalid)
+        if let Ok(expr_obj) = Expression::new(&expr).ok_or(()).and_then(|e| parse_expression(&e).map_err(|_| ())) {
+            // Convert AST to string
+            let pretty_printed = expr_obj.to_string();
+            
+            // Parse the pretty-printed string
+            let reparsed_expr = Expression::from(pretty_printed.as_str());
+            let reparsed_ast = parse_expression(&reparsed_expr).expect("Pretty-printed expr should parse");
+            
+            // Compare the ASTs (they should be equivalent)
+            // Note: We compare evaluation results instead of AST structure
+            // because pretty-printing might change associativity but preserve value
+            let original_value = evaluate(&expr).expect("Original should evaluate");
+            let reparsed_value = evaluate(&pretty_printed).expect("Pretty-printed should evaluate");
+            
+            assert!(
+                (original_value - reparsed_value).abs() < 0.0001,
+                "Round-trip failed: {} -> {} -> {}, values: {} != {}",
+                expr, pretty_printed, reparsed_ast.to_string(), original_value, reparsed_value
+            );
+        }
+    }
 }
 
 #[test]

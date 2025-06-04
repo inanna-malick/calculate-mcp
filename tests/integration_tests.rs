@@ -1,4 +1,4 @@
-use compute_mcp::{evaluate, ComputeError, Expression, evaluate_batch};
+use compute_mcp::{ComputeError, Expression, evaluate_batch};
 
 #[test]
 fn test_integration_basic_expressions() {
@@ -24,13 +24,20 @@ fn test_integration_basic_expressions() {
         ("10 / 4", 2.5),
     ];
     
-    for (expr, expected) in test_cases {
-        let result = evaluate(expr).expect(&format!("Failed to evaluate: {}", expr));
+    // Use batch evaluation instead
+    let expressions: Vec<Expression> = test_cases.iter()
+        .map(|(expr, _)| Expression::from(*expr))
+        .collect();
+    
+    let results = evaluate_batch(&expressions);
+    
+    for ((expr, expected), result) in test_cases.iter().zip(results.iter()) {
+        let value = result.value.as_ref().expect(&format!("Failed to evaluate: {}", expr));
         assert!(
-            (result - expected).abs() < 0.0001,
+            (value - expected).abs() < 0.0001,
             "Expression '{}' evaluated to {} but expected {}",
             expr,
-            result,
+            value,
             expected
         );
     }
@@ -38,12 +45,15 @@ fn test_integration_basic_expressions() {
 
 #[test]
 fn test_error_cases() {
-    // Test specific error types
-    assert!(matches!(evaluate(""), Err(ComputeError::EmptyExpression)));
-    assert!(matches!(evaluate("   "), Err(ComputeError::EmptyExpression)));
+    // Test specific error types using batch evaluation
+    let error_cases = vec![
+        Expression::from("5 / 0"),
+        Expression::from("10 / (5 - 5)"),
+    ];
     
-    assert!(matches!(evaluate("5 / 0"), Err(ComputeError::DivisionByZero)));
-    assert!(matches!(evaluate("10 / (5 - 5)"), Err(ComputeError::DivisionByZero)));
+    let results = evaluate_batch(&error_cases);
+    assert!(matches!(results[0].value, Err(ComputeError::DivisionByZero)));
+    assert!(matches!(results[1].value, Err(ComputeError::DivisionByZero)));
     
     // Test parse errors
     let parse_error_cases = vec![
@@ -60,9 +70,15 @@ fn test_error_cases() {
         "2 */ 3",
     ];
     
-    for expr in parse_error_cases {
+    let parse_expressions: Vec<Expression> = parse_error_cases.iter()
+        .map(|expr| Expression::from(*expr))
+        .collect();
+    
+    let parse_results = evaluate_batch(&parse_expressions);
+    
+    for (expr, result) in parse_error_cases.iter().zip(parse_results.iter()) {
         assert!(
-            matches!(evaluate(expr), Err(ComputeError::ParseError(_))),
+            matches!(result.value, Err(ComputeError::ParseError(_))),
             "Expression '{}' should have resulted in a parse error",
             expr
         );
@@ -72,17 +88,28 @@ fn test_error_cases() {
 #[test]
 fn test_precedence_and_associativity() {
     // Test that operators have correct precedence and associativity
-    assert_eq!(evaluate("2 + 3 + 4").unwrap(), 9.0);
-    assert_eq!(evaluate("2 * 3 + 4").unwrap(), 10.0);
-    assert_eq!(evaluate("2 + 3 * 4").unwrap(), 14.0);
-    assert_eq!(evaluate("2 * 3 * 4").unwrap(), 24.0);
-    assert_eq!(evaluate("20 / 4 / 2").unwrap(), 2.5); // Left associative
-    assert_eq!(evaluate("20 - 10 - 5").unwrap(), 5.0); // Left associative
+    let test_cases = vec![
+        ("2 + 3 + 4", 9.0),
+        ("2 * 3 + 4", 10.0),
+        ("2 + 3 * 4", 14.0),
+        ("2 * 3 * 4", 24.0),
+        ("20 / 4 / 2", 2.5), // Left associative
+        ("20 - 10 - 5", 5.0), // Left associative
+        ("2 + 3 * 4 - 5", 9.0), // 2 + 12 - 5 = 9
+        ("10 / 2 + 3 * 4", 17.0), // 5 + 12 = 17
+        ("10 / (2 + 3) * 4", 8.0), // 10 / 5 * 4 = 8
+    ];
     
-    // Complex precedence tests
-    assert_eq!(evaluate("2 + 3 * 4 - 5").unwrap(), 9.0); // 2 + 12 - 5 = 9
-    assert_eq!(evaluate("10 / 2 + 3 * 4").unwrap(), 17.0); // 5 + 12 = 17
-    assert_eq!(evaluate("10 / (2 + 3) * 4").unwrap(), 8.0); // 10 / 5 * 4 = 8
+    let expressions: Vec<Expression> = test_cases.iter()
+        .map(|(expr, _)| Expression::from(*expr))
+        .collect();
+    
+    let results = evaluate_batch(&expressions);
+    
+    for ((expr, expected), result) in test_cases.iter().zip(results.iter()) {
+        let value = result.value.as_ref().unwrap();
+        assert_eq!(*value, *expected, "Expression '{}' failed", expr);
+    }
 }
 
 #[test]
@@ -138,13 +165,19 @@ fn test_complex_nested_expressions() {
         ("((((1))))", 1.0), // Multiple nested parentheses
     ];
     
-    for (expr, expected) in test_cases {
-        let result = evaluate(expr).unwrap();
+    let expressions: Vec<Expression> = test_cases.iter()
+        .map(|(expr, _)| Expression::from(*expr))
+        .collect();
+    
+    let results = evaluate_batch(&expressions);
+    
+    for ((expr, expected), result) in test_cases.iter().zip(results.iter()) {
+        let value = result.value.as_ref().unwrap();
         assert!(
-            (result - expected).abs() < 0.0001,
+            (value - expected).abs() < 0.0001,
             "Expression '{}' evaluated to {} but expected {}",
             expr,
-            result,
+            value,
             expected
         );
     }

@@ -8,7 +8,6 @@ A minimal arithmetic MCP (Model Context Protocol) server demonstrating how to bu
 - Correct operator precedence
 - Parentheses for grouping
 - Batch evaluation of multiple expressions
-- Calculation history (last 100 calculations)
 
 ## Grammar
 
@@ -19,19 +18,7 @@ The arithmetic grammar (in `src/compute.pest`) supports:
 - Parentheses: `(2 + 3) * 4`
 - Proper precedence: `2 + 3 * 4` evaluates as `2 + (3 * 4) = 14`
 
-## MCP Tools
-
-### evaluate
-Evaluate a single arithmetic expression:
-```json
-{
-  "name": "evaluate",
-  "arguments": {
-    "expression": "2 + 3 * 4"
-  }
-}
-```
-Response: `{"expression": "2 + 3 * 4", "result": 14.0, "success": true}`
+## MCP Tool
 
 ### evaluate_batch
 Evaluate multiple expressions at once:
@@ -44,12 +31,15 @@ Evaluate multiple expressions at once:
 }
 ```
 
-### history
-Get the calculation history:
+Response:
 ```json
 {
-  "name": "history",
-  "arguments": {}
+  "success": true,
+  "results": [
+    {"expression": "2 + 2", "result": 4.0, "error": null, "success": true},
+    {"expression": "10 / 5", "result": 2.0, "error": null, "success": true},
+    {"expression": "(3 + 4) * 2", "result": 14.0, "error": null, "success": true}
+  ]
 }
 ```
 
