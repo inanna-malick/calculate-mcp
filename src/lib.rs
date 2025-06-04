@@ -18,24 +18,22 @@ pub enum Expr {
     Neg(Box<Expr>),
 }
 
-impl Expr {
-    /// Pretty-print the expression to a pest-grammar-compliant string
-    /// Always adds parentheses for clarity
-    pub fn to_string(&self) -> String {
+impl fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Expr::Number(n) => {
                 // Format number to avoid scientific notation and trailing zeros
                 if n.fract() == 0.0 && n.abs() < 1e15 {
-                    format!("{:.0}", n)
+                    write!(f, "{:.0}", n)
                 } else {
-                    format!("{}", n)
+                    write!(f, "{}", n)
                 }
             }
-            Expr::Add(left, right) => format!("({} + {})", left.to_string(), right.to_string()),
-            Expr::Sub(left, right) => format!("({} - {})", left.to_string(), right.to_string()),
-            Expr::Mul(left, right) => format!("({} * {})", left.to_string(), right.to_string()),
-            Expr::Div(left, right) => format!("({} / {})", left.to_string(), right.to_string()),
-            Expr::Neg(expr) => format!("-{}", expr.to_string()),
+            Expr::Add(left, right) => write!(f, "({} + {})", left, right),
+            Expr::Sub(left, right) => write!(f, "({} - {})", left, right),
+            Expr::Mul(left, right) => write!(f, "({} * {})", left, right),
+            Expr::Div(left, right) => write!(f, "({} / {})", left, right),
+            Expr::Neg(expr) => write!(f, "-{}", expr),
         }
     }
 }
@@ -77,7 +75,7 @@ impl From<&str> for Expression {
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum ComputeError {
     #[error("Parse error: {0}")]
-    ParseError(#[from] pest::error::Error<Rule>),
+    ParseError(#[from] Box<pest::error::Error<Rule>>),
     
     #[error("Invalid number: {0}")]
     InvalidNumber(#[from] std::num::ParseFloatError),
@@ -106,7 +104,8 @@ pub fn evaluate(expr: &str) -> Result<f64> {
 
 /// Parse expression into AST
 pub fn parse_expression(expr: &Expression) -> Result<Expr> {
-    let mut pairs = ComputeParser::parse(Rule::expr, expr.as_str())?;
+    let mut pairs = ComputeParser::parse(Rule::expr, expr.as_str())
+        .map_err(Box::new)?;
     
     let expr_pair = pairs.next().ok_or(ComputeError::InvalidStructure {
         context: "Expected expression but found empty input".to_string()

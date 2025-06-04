@@ -1,3 +1,5 @@
+#![allow(clippy::approx_constant)]
+
 use compute_mcp::{Expression, evaluate_batch, ComputeError};
 
 #[test]
@@ -37,7 +39,7 @@ fn test_batch_evaluation_basic() {
 #[test]
 fn test_batch_evaluation_mixed_results() {
     // Test cases with expected results (success or specific error types)
-    let test_cases = vec![
+    let test_cases = [
         ("10 + 5", Ok(15.0)),
         ("20 / 0", Err(ComputeError::DivisionByZero)),
         ("3.14 * 2", Ok(6.28)),
@@ -146,7 +148,7 @@ fn test_batch_evaluation_large_batch() {
 
 #[test]
 fn test_batch_preserves_expression_order() {
-    let test_cases = vec![
+    let test_cases = [
         ("5 * 5", 25.0),
         ("3 + 2", 5.0),
         ("10 - 1", 9.0),
@@ -168,7 +170,7 @@ fn test_batch_preserves_expression_order() {
 
 #[test]
 fn test_batch_evaluation_complex_expressions() {
-    let test_cases = vec![
+    let test_cases = [
         ("((2 + 3) * 4 - 5) / (6 - 1)", 3.0),
         ("2 * (3 + (4 * 5))", 46.0),
         ("-(10 - 15) * 2", 10.0),

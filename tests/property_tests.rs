@@ -217,7 +217,7 @@ proptest! {
     
     #[test]
     fn whitespace_invariance(n1 in arb_safe_number(), n2 in arb_safe_number()) {
-        let expressions = vec![
+        let expressions = [
             format!("{}+{}", n1, n2),
             format!("{} + {}", n1, n2),
             format!("{}  +  {}", n1, n2),
@@ -314,7 +314,7 @@ proptest! {
             assert!(
                 (original_value - reparsed_value).abs() < 0.0001,
                 "Round-trip failed: {} -> {} -> {}, values: {} != {}",
-                expr, pretty_printed, reparsed_ast.to_string(), original_value, reparsed_value
+                expr, pretty_printed, reparsed_ast, original_value, reparsed_value
             );
         }
     }

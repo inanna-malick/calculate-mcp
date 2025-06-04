@@ -1,3 +1,5 @@
+#![allow(clippy::approx_constant)]
+
 use compute_mcp::{ComputeError, Expression, evaluate_batch, evaluate};
 
 #[test]
