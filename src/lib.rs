@@ -85,8 +85,8 @@ pub enum ComputeError {
     #[error("Division by zero")]
     DivisionByZero,
     
-    #[error("Invalid expression structure")]
-    InvalidStructure,
+    #[error("Invalid expression structure: {context}")]
+    InvalidStructure { context: String },
     
     #[error("Empty expression")]
     EmptyExpression,
@@ -108,9 +108,13 @@ pub fn evaluate(expr: &str) -> Result<f64> {
 pub fn parse_expression(expr: &Expression) -> Result<Expr> {
     let mut pairs = ComputeParser::parse(Rule::expr, expr.as_str())?;
     
-    let expr_pair = pairs.next().ok_or(ComputeError::InvalidStructure)?;
+    let expr_pair = pairs.next().ok_or(ComputeError::InvalidStructure {
+        context: "Expected expression but found empty input".to_string()
+    })?;
     let mut inner = expr_pair.into_inner();
-    let additive = inner.next().ok_or(ComputeError::InvalidStructure)?;
+    let additive = inner.next().ok_or(ComputeError::InvalidStructure {
+        context: "Expected additive expression at top level".to_string()
+    })?;
     
     parse_additive(additive)
 }
@@ -118,18 +122,24 @@ pub fn parse_expression(expr: &Expression) -> Result<Expr> {
 fn parse_additive(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
     let mut pairs = pair.into_inner();
     let mut left = parse_multiplicative(
-        pairs.next().ok_or(ComputeError::InvalidStructure)?
+        pairs.next().ok_or(ComputeError::InvalidStructure {
+            context: "Expected left operand in additive expression".to_string()
+        })?
     )?;
     
     while let Some(op) = pairs.next() {
         let right = parse_multiplicative(
-            pairs.next().ok_or(ComputeError::InvalidStructure)?
+            pairs.next().ok_or(ComputeError::InvalidStructure {
+                context: "Expected right operand after + or - operator".to_string()
+            })?
         )?;
         
         left = match op.as_str() {
             "+" => Expr::Add(Box::new(left), Box::new(right)),
             "-" => Expr::Sub(Box::new(left), Box::new(right)),
-            _ => return Err(ComputeError::InvalidStructure),
+            _ => return Err(ComputeError::InvalidStructure {
+                context: format!("Unknown operator '{}' in additive expression", op.as_str())
+            }),
         };
     }
     
@@ -139,18 +149,24 @@ fn parse_additive(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
 fn parse_multiplicative(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
     let mut pairs = pair.into_inner();
     let mut left = parse_unary(
-        pairs.next().ok_or(ComputeError::InvalidStructure)?
+        pairs.next().ok_or(ComputeError::InvalidStructure {
+            context: "Expected left operand in multiplicative expression".to_string()
+        })?
     )?;
     
     while let Some(op) = pairs.next() {
         let right = parse_unary(
-            pairs.next().ok_or(ComputeError::InvalidStructure)?
+            pairs.next().ok_or(ComputeError::InvalidStructure {
+                context: "Expected right operand after * or / operator".to_string()
+            })?
         )?;
         
         left = match op.as_str() {
             "*" => Expr::Mul(Box::new(left), Box::new(right)),
             "/" => Expr::Div(Box::new(left), Box::new(right)),
-            _ => return Err(ComputeError::InvalidStructure),
+            _ => return Err(ComputeError::InvalidStructure {
+                context: format!("Unknown operator '{}' in multiplicative expression", op.as_str())
+            }),
         };
     }
     
@@ -165,12 +181,16 @@ fn parse_unary(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
                 // It's a unary minus
                 let mut inner = pair.into_inner();
                 // Skip the minus sign token and get the operand
-                let operand = inner.next().ok_or(ComputeError::InvalidStructure)?;
+                let operand = inner.next().ok_or(ComputeError::InvalidStructure {
+                    context: "Expected operand after unary minus".to_string()
+                })?;
                 Ok(Expr::Neg(Box::new(parse_unary(operand)?)))
             } else {
                 // It's just a primary expression wrapped in unary
                 let mut inner = pair.into_inner();
-                let first = inner.next().ok_or(ComputeError::InvalidStructure)?;
+                let first = inner.next().ok_or(ComputeError::InvalidStructure {
+                    context: "Expected primary expression in unary".to_string()
+                })?;
                 parse_primary(first)
             }
         }
@@ -184,20 +204,26 @@ fn parse_primary(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
         Rule::primary => {
             let inner = pair.into_inner()
                 .next()
-                .ok_or(ComputeError::InvalidStructure)?;
+                .ok_or(ComputeError::InvalidStructure {
+                    context: "Expected inner expression in parentheses".to_string()
+                })?;
             
             match inner.as_rule() {
                 Rule::number => Ok(Expr::Number(inner.as_str().parse()?)),
                 Rule::additive => parse_additive(inner),
-                _ => Err(ComputeError::InvalidStructure),
+                _ => Err(ComputeError::InvalidStructure {
+                    context: format!("Unexpected rule {:?} in primary expression", inner.as_rule())
+                }),
             }
         }
-        _ => Err(ComputeError::InvalidStructure),
+        _ => Err(ComputeError::InvalidStructure {
+            context: format!("Unexpected rule {:?} where primary expression expected", pair.as_rule())
+        }),
     }
 }
 
 /// Evaluate an AST expression
-fn eval_expr(expr: &Expr) -> Result<f64> {
+pub fn eval_expr(expr: &Expr) -> Result<f64> {
     match expr {
         Expr::Number(n) => Ok(*n),
         Expr::Add(left, right) => Ok(eval_expr(left)? + eval_expr(right)?),
@@ -238,142 +264,3 @@ pub fn evaluate_batch(expressions: &[Expression]) -> Vec<EvaluationResult> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_expression_type() {
-        assert!(Expression::new("").is_none());
-        assert!(Expression::new("  ").is_none());
-        assert!(Expression::new("2+3").is_some());
-        
-        let expr = Expression::from("2 + 3");
-        assert_eq!(expr.as_str(), "2 + 3");
-        assert_eq!(expr.to_string(), "2 + 3");
-    }
-
-    #[test]
-    fn test_basic_arithmetic() {
-        let expr = Expression::from("42");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 42.0);
-        
-        let expr = Expression::from("2 + 3");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 5.0);
-        
-        let expr = Expression::from("10 - 4");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 6.0);
-        
-        let expr = Expression::from("3 * 4");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 12.0);
-        
-        let expr = Expression::from("15 / 3");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 5.0);
-    }
-
-    #[test]
-    fn test_precedence() {
-        let expr = Expression::from("2 + 3 * 4");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 14.0);
-        
-        let expr = Expression::from("10 - 6 / 2");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 7.0);
-        
-        let expr = Expression::from("2 * 3 + 4");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 10.0);
-    }
-
-    #[test]
-    fn test_parentheses() {
-        let expr = Expression::from("(2 + 3) * 4");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 20.0);
-        
-        let expr = Expression::from("2 * (3 + 4)");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 14.0);
-        
-        let expr = Expression::from("((1 + 2) * 3) + 4");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 13.0);
-    }
-
-    #[test]
-    fn test_decimals() {
-        let expr = Expression::from("3.14");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 3.14);
-        
-        let expr = Expression::from("2.5 * 4");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 10.0);
-        
-        let expr = Expression::from("10 / 4");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 2.5);
-    }
-
-    #[test]
-    fn test_negative_numbers() {
-        let expr = Expression::from("-5");
-        assert_eq!(evaluate_expression(&expr).unwrap(), -5.0);
-        
-        let expr = Expression::from("-3 + 5");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 2.0);
-        
-        let expr = Expression::from("10 + -3");
-        assert_eq!(evaluate_expression(&expr).unwrap(), 7.0);
-    }
-
-    #[test]
-    fn test_error_cases() {
-        // Division by zero
-        let expr = Expression::from("5 / 0");
-        matches!(evaluate_expression(&expr), Err(ComputeError::DivisionByZero));
-        
-        let expr = Expression::from("1 / (2 - 2)");
-        matches!(evaluate_expression(&expr), Err(ComputeError::DivisionByZero));
-        
-        // Empty expression
-        assert!(Expression::new("").is_none());
-        assert!(Expression::new("   ").is_none());
-    }
-
-    #[test]
-    fn test_batch_evaluation() {
-        let expressions = vec![
-            Expression::from("2 + 3"),
-            Expression::from("10 / 2"),
-            Expression::from("5 / 0"),
-            Expression::from("3 * 4"),
-        ];
-        
-        let results = evaluate_batch(&expressions);
-        assert_eq!(results.len(), 4);
-        assert_eq!(results[0].value.as_ref().unwrap(), &5.0);
-        assert_eq!(results[1].value.as_ref().unwrap(), &5.0);
-        assert!(matches!(results[2].value, Err(ComputeError::DivisionByZero)));
-        assert_eq!(results[3].value.as_ref().unwrap(), &12.0);
-    }
-
-    #[test]
-    fn test_pretty_printer() {
-        // Test simple number
-        let expr = parse_expression(&Expression::from("42")).unwrap();
-        assert_eq!(expr.to_string(), "42");
-        
-        // Test addition with parentheses
-        let expr = parse_expression(&Expression::from("2 + 3")).unwrap();
-        assert_eq!(expr.to_string(), "(2 + 3)");
-        
-        // Test nested operations
-        let expr = parse_expression(&Expression::from("2 + 3 * 4")).unwrap();
-        assert_eq!(expr.to_string(), "(2 + (3 * 4))");
-        
-        // Test complex expression
-        let expr = parse_expression(&Expression::from("(2 + 3) * 4")).unwrap();
-        assert_eq!(expr.to_string(), "((2 + 3) * 4)");
-        
-        // Test negation
-        let expr = parse_expression(&Expression::from("-5")).unwrap();
-        assert_eq!(expr.to_string(), "-5");
-        
-        // Test negation with expression
-        let expr = parse_expression(&Expression::from("-(2 + 3)")).unwrap();
-        assert_eq!(expr.to_string(), "-(2 + 3)");
-    }
-}
