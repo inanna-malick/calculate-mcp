@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use compute_mcp::{evaluate, evaluate_batch, Expression};
 use serde::Serialize;
 use std::io::{self, BufRead};
+use std::env;
 
 #[derive(Parser)]
 #[command(name = "compute")]
@@ -13,9 +14,13 @@ struct Cli {
     /// Expression to evaluate (if no subcommand is provided)
     expression: Option<String>,
     
-    /// Output format
-    #[arg(short, long, value_enum, default_value = "plain")]
-    format: OutputFormat,
+    /// Output format (env: COMPUTE_FORMAT)
+    #[arg(short, long, value_enum)]
+    format: Option<OutputFormat>,
+    
+    /// Output errors to stderr instead of stdout (human-friendly mode)
+    #[arg(long)]
+    stderr: bool,
 }
 
 #[derive(Subcommand)]
@@ -25,9 +30,13 @@ enum Commands {
         /// The expression to evaluate
         expression: String,
         
-        /// Output format
-        #[arg(short, long, value_enum, default_value = "plain")]
-        format: OutputFormat,
+        /// Output format (env: COMPUTE_FORMAT)
+        #[arg(short, long, value_enum)]
+        format: Option<OutputFormat>,
+        
+        /// Output errors to stderr instead of stdout
+        #[arg(long)]
+        stderr: bool,
     },
     
     /// Evaluate multiple expressions in batch
@@ -39,9 +48,13 @@ enum Commands {
         /// Expressions to evaluate
         expressions: Vec<String>,
         
-        /// Output format
-        #[arg(short, long, value_enum, default_value = "plain")]
-        format: OutputFormat,
+        /// Output format (env: COMPUTE_FORMAT)
+        #[arg(short, long, value_enum)]
+        format: Option<OutputFormat>,
+        
+        /// Output errors to stderr instead of stdout
+        #[arg(long)]
+        stderr: bool,
     },
     
     /// Interactive REPL mode
@@ -78,20 +91,41 @@ struct Summary {
     failed: usize,
 }
 
+/// Get the output format from CLI arg, env var, or default (json for better LLM integration)
+fn get_format(format: Option<OutputFormat>) -> OutputFormat {
+    // First check if format was provided via CLI
+    if let Some(fmt) = format {
+        return fmt;
+    }
+    
+    // Then check environment variable
+    if let Ok(env_format) = env::var("COMPUTE_FORMAT") {
+        match env_format.to_lowercase().as_str() {
+            "plain" => return OutputFormat::Plain,
+            "json" => return OutputFormat::Json,
+            "pretty" => return OutputFormat::Pretty,
+            _ => {} // fall through to default
+        }
+    }
+    
+    // Default to JSON for better LLM integration
+    OutputFormat::Json
+}
+
 fn main() {
     let cli = Cli::parse();
     
     match cli.command {
-        Some(Commands::Eval { expression, format }) => {
-            evaluate_expression(&expression, format);
+        Some(Commands::Eval { expression, format, stderr }) => {
+            evaluate_expression(&expression, get_format(format), stderr);
         }
-        Some(Commands::Batch { stdin, expressions, format }) => {
+        Some(Commands::Batch { stdin, expressions, format, stderr }) => {
             let expressions = if stdin {
                 read_stdin_expressions()
             } else {
                 expressions
             };
-            evaluate_batch_expressions(&expressions, format);
+            evaluate_batch_expressions(&expressions, get_format(format), stderr);
         }
         Some(Commands::Repl { show_history }) => {
             run_repl(show_history);
@@ -99,7 +133,7 @@ fn main() {
         None => {
             // If no subcommand but expression provided, evaluate it
             if let Some(expr) = cli.expression {
-                evaluate_expression(&expr, cli.format);
+                evaluate_expression(&expr, get_format(cli.format), cli.stderr);
             } else {
                 eprintln!("Error: No expression provided. Use --help for usage information.");
                 std::process::exit(1);
@@ -108,7 +142,7 @@ fn main() {
     }
 }
 
-fn evaluate_expression(expr: &str, format: OutputFormat) {
+fn evaluate_expression(expr: &str, format: OutputFormat, use_stderr: bool) {
     let result = evaluate(expr);
     
     match format {
@@ -116,7 +150,11 @@ fn evaluate_expression(expr: &str, format: OutputFormat) {
             match result {
                 Ok(value) => println!("{}", value),
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    if use_stderr {
+                        eprintln!("Error: {}", e);
+                    } else {
+                        println!("Error: {}", e);
+                    }
                     std::process::exit(1);
                 }
             }
@@ -132,7 +170,11 @@ fn evaluate_expression(expr: &str, format: OutputFormat) {
             match result {
                 Ok(value) => println!("{} = {}", expr, value),
                 Err(e) => {
-                    eprintln!("Error evaluating '{}': {}", expr, e);
+                    if use_stderr {
+                        eprintln!("Error evaluating '{}': {}", expr, e);
+                    } else {
+                        println!("Error evaluating '{}': {}", expr, e);
+                    }
                     std::process::exit(1);
                 }
             }
@@ -140,7 +182,7 @@ fn evaluate_expression(expr: &str, format: OutputFormat) {
     }
 }
 
-fn evaluate_batch_expressions(expressions: &[String], format: OutputFormat) {
+fn evaluate_batch_expressions(expressions: &[String], format: OutputFormat, use_stderr: bool) {
     let expr_refs: Vec<Expression> = expressions
         .iter()
         .filter_map(|s| Expression::new(s.clone()))
@@ -165,7 +207,13 @@ fn evaluate_batch_expressions(expressions: &[String], format: OutputFormat) {
             for (expr, result) in expressions.iter().zip(results.iter()) {
                 match &result.value {
                     Ok(value) => println!("{} = {}", expr, value),
-                    Err(e) => eprintln!("{}: Error: {}", expr, e),
+                    Err(e) => {
+                        if use_stderr {
+                            eprintln!("{}: Error: {}", expr, e);
+                        } else {
+                            println!("{}: Error: {}", expr, e);
+                        }
+                    }
                 }
             }
         }
