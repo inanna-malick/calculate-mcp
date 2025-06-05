@@ -2,7 +2,7 @@
 name = "compute-mcp"
 version = "0.1.0"
 edition = "2021"
-description = "Minimal arithmetic MCP server for blog example"
+description = "🔮 Crystalline arithmetic MCP server"
 
 [[bin]]
 name = "stdio_direct"
@@ -15,7 +15,6 @@ path = "src/bin/compute.rs"
 [dependencies]
 mcpr = "0.2.3"
 anyhow = "1.0"
-thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 pest = "2.6"

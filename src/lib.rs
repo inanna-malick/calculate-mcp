@@ -1,13 +1,12 @@
 use pest::Parser;
 use pest_derive::Parser;
 use std::fmt;
-use thiserror::Error;
 
 #[derive(Parser)]
 #[grammar = "compute.pest"]
 pub struct ComputeParser;
 
-/// AST representation of arithmetic expressions
+/// 🔮 Pure arithmetic expression
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Number(f64),
@@ -21,39 +20,27 @@ pub enum Expr {
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Expr::Number(n) => {
-                // Format number to avoid scientific notation and trailing zeros
-                if n.fract() == 0.0 && n.abs() < 1e15 {
-                    write!(f, "{:.0}", n)
-                } else {
-                    write!(f, "{}", n)
-                }
-            }
-            Expr::Add(left, right) => write!(f, "({} + {})", left, right),
-            Expr::Sub(left, right) => write!(f, "({} - {})", left, right),
-            Expr::Mul(left, right) => write!(f, "({} * {})", left, right),
-            Expr::Div(left, right) => write!(f, "({} / {})", left, right),
-            Expr::Neg(expr) => write!(f, "-{}", expr),
+            Expr::Number(n) if n.fract() == 0.0 && n.abs() < 1e15 => write!(f, "{:.0}", n),
+            Expr::Number(n) => write!(f, "{}", n),
+            Expr::Add(l, r) => write!(f, "({} + {})", l, r),
+            Expr::Sub(l, r) => write!(f, "({} - {})", l, r),
+            Expr::Mul(l, r) => write!(f, "({} * {})", l, r),
+            Expr::Div(l, r) => write!(f, "({} / {})", l, r),
+            Expr::Neg(e) => write!(f, "-{}", e),
         }
     }
 }
 
-/// Strong type for arithmetic expressions
+/// 💎 Expression with vibes
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expression(String);
 
 impl Expression {
-    /// Create a new expression, returning None if empty
     pub fn new(expr: impl Into<String>) -> Option<Self> {
         let expr = expr.into();
-        if expr.trim().is_empty() {
-            None
-        } else {
-            Some(Self(expr))
-        }
+        (!expr.trim().is_empty()).then(|| Self(expr))
     }
 
-    /// Get the expression as a string slice
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -71,74 +58,77 @@ impl From<&str> for Expression {
     }
 }
 
-/// Custom error type for compute operations
-#[derive(Error, Debug, Clone, PartialEq)]
+/// 🌊 Crystalline errors
+#[derive(Debug, Clone, PartialEq)]
 pub enum ComputeError {
-    #[error("Parse error: {0}")]
-    ParseError(#[from] Box<pest::error::Error<Rule>>),
-    
-    #[error("Invalid number: {0}")]
-    InvalidNumber(#[from] std::num::ParseFloatError),
-    
-    #[error("Division by zero")]
+    ParseError(Box<pest::error::Error<Rule>>),
+    InvalidNumber(std::num::ParseFloatError),
     DivisionByZero,
-    
-    #[error("Invalid expression structure: {context}")]
-    InvalidStructure { context: String },
-    
-    #[error("Empty expression")]
+    InvalidStructure(String),
     EmptyExpression,
+}
+
+impl fmt::Display for ComputeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ParseError(e) => write!(f, "Parse: {}", e),
+            Self::InvalidNumber(e) => write!(f, "Number: {}", e),
+            Self::DivisionByZero => write!(f, "Division by zero"),
+            Self::InvalidStructure(ctx) => write!(f, "Structure: {}", ctx),
+            Self::EmptyExpression => write!(f, "Empty expression"),
+        }
+    }
+}
+
+impl std::error::Error for ComputeError {}
+
+impl From<Box<pest::error::Error<Rule>>> for ComputeError {
+    fn from(e: Box<pest::error::Error<Rule>>) -> Self {
+        Self::ParseError(e)
+    }
+}
+
+impl From<std::num::ParseFloatError> for ComputeError {
+    fn from(e: std::num::ParseFloatError) -> Self {
+        Self::InvalidNumber(e)
+    }
 }
 
 pub type Result<T> = std::result::Result<T, ComputeError>;
 
-/// Evaluate an arithmetic expression from a string
+/// 🎯 Direct evaluation
 pub fn evaluate(expr: &str) -> Result<f64> {
-    if expr.trim().is_empty() {
-        return Err(ComputeError::EmptyExpression);
-    }
-    
-    let expression = Expression::from(expr);
-    evaluate_expression(&expression)
+    expr.trim().is_empty()
+        .then(|| Err(ComputeError::EmptyExpression))
+        .unwrap_or_else(|| evaluate_expression(&Expression::from(expr)))
 }
 
-/// Parse expression into AST
+/// 🎯 Parse to AST
 pub fn parse_expression(expr: &Expression) -> Result<Expr> {
     let mut pairs = ComputeParser::parse(Rule::expr, expr.as_str())
         .map_err(Box::new)?;
     
-    let expr_pair = pairs.next().ok_or(ComputeError::InvalidStructure {
-        context: "Expected expression but found empty input".to_string()
-    })?;
-    let mut inner = expr_pair.into_inner();
-    let additive = inner.next().ok_or(ComputeError::InvalidStructure {
-        context: "Expected additive expression at top level".to_string()
-    })?;
-    
-    parse_additive(additive)
+    pairs.next()
+        .and_then(|p| p.into_inner().next())
+        .ok_or(ComputeError::InvalidStructure("Empty parse".into()))
+        .and_then(parse_additive)
 }
 
 fn parse_additive(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
     let mut pairs = pair.into_inner();
-    let mut left = parse_multiplicative(
-        pairs.next().ok_or(ComputeError::InvalidStructure {
-            context: "Expected left operand in additive expression".to_string()
-        })?
-    )?;
+    let mut left = parse_multiplicative(pairs.next().ok_or(
+        ComputeError::InvalidStructure("Missing left operand".into())
+    )?)?;
     
     while let Some(op) = pairs.next() {
-        let right = parse_multiplicative(
-            pairs.next().ok_or(ComputeError::InvalidStructure {
-                context: "Expected right operand after + or - operator".to_string()
-            })?
-        )?;
+        let right = parse_multiplicative(pairs.next().ok_or(
+            ComputeError::InvalidStructure("Missing right operand".into())
+        )?)?;
         
         left = match op.as_str() {
             "+" => Expr::Add(Box::new(left), Box::new(right)),
             "-" => Expr::Sub(Box::new(left), Box::new(right)),
-            _ => return Err(ComputeError::InvalidStructure {
-                context: format!("Unknown operator '{}' in additive expression", op.as_str())
-            }),
+            _ => return Err(ComputeError::InvalidStructure(format!("Bad op: {}", op.as_str()))),
         };
     }
     
@@ -147,25 +137,19 @@ fn parse_additive(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
 
 fn parse_multiplicative(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
     let mut pairs = pair.into_inner();
-    let mut left = parse_unary(
-        pairs.next().ok_or(ComputeError::InvalidStructure {
-            context: "Expected left operand in multiplicative expression".to_string()
-        })?
-    )?;
+    let mut left = parse_unary(pairs.next().ok_or(
+        ComputeError::InvalidStructure("Missing left operand".into())
+    )?)?;
     
     while let Some(op) = pairs.next() {
-        let right = parse_unary(
-            pairs.next().ok_or(ComputeError::InvalidStructure {
-                context: "Expected right operand after * or / operator".to_string()
-            })?
-        )?;
+        let right = parse_unary(pairs.next().ok_or(
+            ComputeError::InvalidStructure("Missing right operand".into())
+        )?)?;
         
         left = match op.as_str() {
             "*" => Expr::Mul(Box::new(left), Box::new(right)),
             "/" => Expr::Div(Box::new(left), Box::new(right)),
-            _ => return Err(ComputeError::InvalidStructure {
-                context: format!("Unknown operator '{}' in multiplicative expression", op.as_str())
-            }),
+            _ => return Err(ComputeError::InvalidStructure(format!("Bad op: {}", op.as_str()))),
         };
     }
     
@@ -174,24 +158,15 @@ fn parse_multiplicative(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
 
 fn parse_unary(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
     match pair.as_rule() {
+        Rule::unary if pair.as_str().starts_with('-') => {
+            pair.into_inner().next()
+                .ok_or(ComputeError::InvalidStructure("Missing operand".into()))
+                .and_then(|op| parse_unary(op).map(|e| Expr::Neg(Box::new(e))))
+        }
         Rule::unary => {
-            let inner_str = pair.as_str();
-            if inner_str.starts_with('-') {
-                // It's a unary minus
-                let mut inner = pair.into_inner();
-                // Skip the minus sign token and get the operand
-                let operand = inner.next().ok_or(ComputeError::InvalidStructure {
-                    context: "Expected operand after unary minus".to_string()
-                })?;
-                Ok(Expr::Neg(Box::new(parse_unary(operand)?)))
-            } else {
-                // It's just a primary expression wrapped in unary
-                let mut inner = pair.into_inner();
-                let first = inner.next().ok_or(ComputeError::InvalidStructure {
-                    context: "Expected primary expression in unary".to_string()
-                })?;
-                parse_primary(first)
-            }
+            pair.into_inner().next()
+                .ok_or(ComputeError::InvalidStructure("Missing primary".into()))
+                .and_then(parse_primary)
         }
         _ => parse_primary(pair),
     }
@@ -199,67 +174,53 @@ fn parse_unary(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
 
 fn parse_primary(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
     match pair.as_rule() {
-        Rule::number => Ok(Expr::Number(pair.as_str().parse()?)),
-        Rule::primary => {
-            let inner = pair.into_inner()
-                .next()
-                .ok_or(ComputeError::InvalidStructure {
-                    context: "Expected inner expression in parentheses".to_string()
-                })?;
-            
-            match inner.as_rule() {
-                Rule::number => Ok(Expr::Number(inner.as_str().parse()?)),
+        Rule::number => pair.as_str().parse().map(Expr::Number).map_err(Into::into),
+        Rule::primary => pair.into_inner().next()
+            .ok_or(ComputeError::InvalidStructure("Empty parens".into()))
+            .and_then(|inner| match inner.as_rule() {
+                Rule::number => inner.as_str().parse().map(Expr::Number).map_err(Into::into),
                 Rule::additive => parse_additive(inner),
-                _ => Err(ComputeError::InvalidStructure {
-                    context: format!("Unexpected rule {:?} in primary expression", inner.as_rule())
-                }),
-            }
-        }
-        _ => Err(ComputeError::InvalidStructure {
-            context: format!("Unexpected rule {:?} where primary expression expected", pair.as_rule())
-        }),
+                _ => Err(ComputeError::InvalidStructure(format!("Bad rule: {:?}", inner.as_rule()))),
+            }),
+        _ => Err(ComputeError::InvalidStructure(format!("Bad primary: {:?}", pair.as_rule()))),
     }
 }
 
-/// Evaluate an AST expression
+/// 🔮 Crystalline evaluation
 pub fn eval_expr(expr: &Expr) -> Result<f64> {
     match expr {
         Expr::Number(n) => Ok(*n),
-        Expr::Add(left, right) => Ok(eval_expr(left)? + eval_expr(right)?),
-        Expr::Sub(left, right) => Ok(eval_expr(left)? - eval_expr(right)?),
-        Expr::Mul(left, right) => Ok(eval_expr(left)? * eval_expr(right)?),
-        Expr::Div(left, right) => {
-            let divisor = eval_expr(right)?;
-            if divisor == 0.0 {
-                Err(ComputeError::DivisionByZero)
+        Expr::Add(l, r) => Ok(eval_expr(l)? + eval_expr(r)?),
+        Expr::Sub(l, r) => Ok(eval_expr(l)? - eval_expr(r)?),
+        Expr::Mul(l, r) => Ok(eval_expr(l)? * eval_expr(r)?),
+        Expr::Div(l, r) => {
+            let divisor = eval_expr(r)?;
+            if divisor != 0.0 {
+                Ok(eval_expr(l)? / divisor)
             } else {
-                Ok(eval_expr(left)? / divisor)
+                Err(ComputeError::DivisionByZero)
             }
         }
-        Expr::Neg(expr) => Ok(-eval_expr(expr)?),
+        Expr::Neg(e) => eval_expr(e).map(|n| -n),
     }
 }
 
-/// Evaluate a strongly-typed expression
 fn evaluate_expression(expr: &Expression) -> Result<f64> {
-    let ast = parse_expression(expr)?;
-    eval_expr(&ast)
+    parse_expression(expr).and_then(|ast| eval_expr(&ast))
 }
 
-/// Batch evaluation result
+/// 📦 Batch result
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvaluationResult {
     pub expression: Expression,
     pub value: Result<f64>,
 }
 
-/// Evaluate multiple expressions at once
+/// 🎯 Batch evaluation
 pub fn evaluate_batch(expressions: &[Expression]) -> Vec<EvaluationResult> {
-    expressions.iter()
-        .map(|expr| EvaluationResult {
-            expression: expr.clone(),
-            value: evaluate_expression(expr),
-        })
-        .collect()
+    expressions.iter().map(|expr| EvaluationResult {
+        expression: expr.clone(),
+        value: evaluate_expression(expr),
+    }).collect()
 }
 
