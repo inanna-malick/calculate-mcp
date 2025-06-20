@@ -1,6 +1,8 @@
 use compute_mcp::{evaluate, ComputeError, Expr};
 use proptest::prelude::*;
 
+mod proptest_adversarial;
+
 // Basic sanity tests that are easy to read and understand
 #[test]
 fn basic_arithmetic() {

@@ -1,5 +1,6 @@
 use pest::Parser;
 use pest_derive::Parser;
+use pest::pratt_parser::{Assoc, Op, PrattParser};
 use std::fmt;
 
 #[derive(Parser)]
@@ -56,6 +57,18 @@ impl std::error::Error for ComputeError {}
 
 pub type Result<T> = std::result::Result<T, ComputeError>;
 
+lazy_static::lazy_static! {
+    static ref PRATT_PARSER: PrattParser<Rule> = {
+        use Assoc::*;
+        use Rule::*;
+
+        PrattParser::new()
+            .op(Op::infix(add, Left) | Op::infix(subtract, Left))
+            .op(Op::infix(multiply, Left) | Op::infix(divide, Left))
+            .op(Op::prefix(neg))
+    };
+}
+
 /// Evaluate an arithmetic expression string
 pub fn evaluate(expr: &str) -> Result<f64> {
     let expr = expr.trim();
@@ -67,90 +80,87 @@ pub fn evaluate(expr: &str) -> Result<f64> {
 
 /// Parse an expression string into an AST using the Pest grammar
 pub fn parse_expression(expr: &str) -> Result<Expr> {
-    let mut pairs = ComputeParser::parse(Rule::expr, expr)
+    let pairs = ComputeParser::parse(Rule::equation, expr)
         .map_err(|e| ComputeError::ParseError(Box::new(e)))?;
-
-    let expr_pair = pairs.next()
-        .ok_or(ComputeError::InvalidStructure("No expression".into()))?;
     
-    let additive_pair = expr_pair.into_inner().next()
-        .ok_or(ComputeError::InvalidStructure("Empty expression".into()))?;
+    let expr_pair = pairs
+        .into_iter()
+        .next()
+        .ok_or(ComputeError::InvalidStructure("No expression found".into()))?;
     
-    parse_additive(additive_pair)
+    parse_expr(expr_pair.into_inner())
 }
 
-fn parse_binary<F, G>(
-    pair: pest::iterators::Pair<Rule>,
-    parse_next: F,
-    make_expr: G,
-) -> Result<Expr>
-where
-    F: Fn(pest::iterators::Pair<Rule>) -> Result<Expr>,
-    G: Fn(&str, Box<Expr>, Box<Expr>) -> Option<Expr>,
-{
-    let mut pairs = pair.into_inner();
-    let mut left = parse_next(pairs.next().ok_or(ComputeError::InvalidStructure(
-        "Missing left operand".into(),
-    ))?)?;
-
-    while let Some(op) = pairs.next() {
-        let right = parse_next(pairs.next().ok_or(ComputeError::InvalidStructure(
-            "Missing right operand".into(),
-        ))?)?;
-
-        left = make_expr(op.as_str(), Box::new(left), Box::new(right))
-            .ok_or_else(|| ComputeError::InvalidStructure(format!("Bad op: {}", op.as_str())))?;
-    }
-
-    Ok(left)
-}
-
-fn parse_additive(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-    parse_binary(pair, parse_multiplicative, |op, l, r| match op {
-        "+" => Some(Expr::Add(l, r)),
-        "-" => Some(Expr::Sub(l, r)),
-        _ => None,
-    })
-}
-
-fn parse_multiplicative(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-    parse_binary(pair, parse_unary, |op, l, r| match op {
-        "*" => Some(Expr::Mul(l, r)),
-        "/" => Some(Expr::Div(l, r)),
-        _ => None,
-    })
-}
-
-fn parse_unary(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-    match pair.as_rule() {
-        Rule::unary if pair.as_str().starts_with('-') => pair
-            .into_inner()
-            .next()
-            .ok_or(ComputeError::InvalidStructure("Missing operand".into()))
-            .and_then(|op| parse_unary(op).map(|e| Expr::Neg(Box::new(e)))),
-        Rule::unary => pair
-            .into_inner()
-            .next()
-            .ok_or(ComputeError::InvalidStructure("Missing primary".into()))
-            .and_then(parse_primary),
-        _ => parse_primary(pair),
-    }
-}
-
-fn parse_primary(pair: pest::iterators::Pair<Rule>) -> Result<Expr> {
-    match pair.as_rule() {
-        Rule::number => pair
-            .as_str()
-            .parse()
-            .map(Expr::Number)
-            .map_err(ComputeError::InvalidNumber),
-        Rule::primary => pair
-            .into_inner()
-            .next()
-            .ok_or(ComputeError::InvalidStructure("Empty parens".into()))
-            .and_then(parse_additive),
-        _ => Err(ComputeError::InvalidStructure("Bad primary".into())),
-    }
+fn parse_expr(pairs: pest::iterators::Pairs<Rule>) -> Result<Expr> {
+    PRATT_PARSER
+        .map_primary(|primary| match primary.as_rule() {
+            Rule::number => primary
+                .as_str()
+                .parse()
+                .map(Expr::Number)
+                .map_err(ComputeError::InvalidNumber),
+            Rule::expr => parse_expr(primary.into_inner()),
+            Rule::primary => {
+                let mut inner = primary.into_inner();
+                let mut neg_count = 0;
+                
+                // Count negation operators
+                while let Some(pair) = inner.peek() {
+                    if matches!(pair.as_rule(), Rule::neg) {
+                        neg_count += 1;
+                        inner.next();
+                    } else {
+                        break;
+                    }
+                }
+                
+                // Parse the atom
+                let atom = inner.next()
+                    .ok_or(ComputeError::InvalidStructure("Missing atom in primary".into()))?;
+                
+                let mut expr = match atom.as_rule() {
+                    Rule::number => atom
+                        .as_str()
+                        .parse()
+                        .map(Expr::Number)
+                        .map_err(ComputeError::InvalidNumber)?,
+                    Rule::expr => parse_expr(atom.into_inner())?,
+                    _ => return Err(ComputeError::InvalidStructure(format!(
+                        "Unexpected atom: {:?}",
+                        atom.as_rule()
+                    ))),
+                };
+                
+                // Apply negations
+                for _ in 0..neg_count {
+                    expr = Expr::Neg(Box::new(expr));
+                }
+                
+                Ok(expr)
+            }
+            _ => Err(ComputeError::InvalidStructure(format!(
+                "Unexpected primary: {:?}",
+                primary.as_rule()
+            ))),
+        })
+        .map_prefix(|op, rhs| match op.as_rule() {
+            Rule::neg => Ok(Expr::Neg(Box::new(rhs?))),
+            _ => Err(ComputeError::InvalidStructure(format!(
+                "Unknown prefix operator: {:?}",
+                op.as_rule()
+            ))),
+        })
+        .map_infix(|lhs, op, rhs| match op.as_rule() {
+            Rule::add => Ok(Expr::Add(Box::new(lhs?), Box::new(rhs?))),
+            Rule::subtract => Ok(Expr::Sub(Box::new(lhs?), Box::new(rhs?))),
+            Rule::multiply => Ok(Expr::Mul(Box::new(lhs?), Box::new(rhs?))),
+            Rule::divide => Ok(Expr::Div(Box::new(lhs?), Box::new(rhs?))),
+            _ => Err(ComputeError::InvalidStructure(format!(
+                "Unknown infix operator: {:?}",
+                op.as_rule()
+            ))),
+        })
+        .parse(pairs)
 }
 
 /// Evaluate an AST expression to produce a numeric result
@@ -203,7 +213,7 @@ mod tests {
         assert_eq!(expr, Expr::Number(3.14));
         
         let expr = parse_expression("-10").unwrap();
-        assert_eq!(expr, Expr::Number(-10.0));
+        assert_eq!(expr, Expr::Neg(Box::new(Expr::Number(10.0))));
     }
 
     #[test]

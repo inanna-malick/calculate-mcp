@@ -1,16 +1,39 @@
-// Arithmetic expression grammar with standard precedence
-expr = { SOI ~ additive ~ EOI }
+// Pratt parser grammar for arithmetic expressions
 
-additive = { multiplicative ~ (add_op ~ multiplicative)* }
-add_op = { "+" | "-" }
+// No whitespace allowed between digits
+integer = @{ ASCII_DIGIT+ }
 
-multiplicative = { unary ~ (mul_op ~ unary)* }
-mul_op = { "*" | "/" }
+// Decimal numbers
+decimal = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 
-unary = { "-" ~ unary | primary }
+// Scientific notation
+scientific = @{ (decimal | integer) ~ ("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+ }
 
-primary = { number | "(" ~ additive ~ ")" }
+// Numbers can be integers, decimals, or scientific notation
+number = @{ scientific | decimal | integer }
 
-number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+// Atoms are the basic units - numbers or parenthesized expressions
+atom = _{ number | "(" ~ expr ~ ")" }
 
+// Binary operators
+bin_op = _{ add | subtract | multiply | divide }
+    add = { "+" }
+    subtract = { "-" }
+    multiply = { "*" }
+    divide = { "/" }
+
+// Unary operators
+un_op = _{ neg }
+    neg = { "-" }
+
+// Primary expression can have multiple unary operators
+primary = { un_op* ~ atom }
+
+// Expression: primary, then any number of (bin_op primary) pairs
+expr = { primary ~ (bin_op ~ primary)* }
+
+// Whitespace can be spaces, tabs, newlines, or carriage returns
 WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+
+// Top-level equation with start/end markers
+equation = _{ SOI ~ expr ~ EOI }
