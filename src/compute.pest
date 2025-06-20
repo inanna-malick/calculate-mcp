@@ -1,4 +1,4 @@
-// 🔮 Crystalline arithmetic grammar
+// Arithmetic expression grammar with standard precedence
 expr = { SOI ~ additive ~ EOI }
 
 additive = { multiplicative ~ (add_op ~ multiplicative)* }

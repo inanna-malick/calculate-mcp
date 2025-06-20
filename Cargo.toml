@@ -8,10 +8,6 @@ description = "🔮 Crystalline arithmetic MCP server"
 name = "stdio_direct"
 path = "src/bin/stdio_direct.rs"
 
-[[bin]]
-name = "compute"
-path = "src/bin/compute.rs"
-
 [dependencies]
 mcpr = "0.2.3"
 anyhow = "1.0"
